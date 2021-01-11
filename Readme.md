@@ -8,7 +8,8 @@ See: https://github.com/jaredeh/axfs
 Status
 ------
 
-This project is barely usable.  It will load "initrd.img" from the current directory, and list the contents.
+This project is barely usable.  ~~It will load "initrd.img" from the current directory, and list the contents.~~
+specifiy img file in cli and it will dump it into a tar file.
 
 Error handling is not implemented, it will crash on errors.
 
