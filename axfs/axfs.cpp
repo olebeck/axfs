@@ -7,7 +7,9 @@
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-
+#include "microtar.h"
+#include <sys/stat.h>
+#pragma warning(disable : 4996)
 inline uint16_t byteswap(uint16_t v)
 {
 	return _byteswap_ushort(v);
@@ -152,6 +154,57 @@ void loadRegionImpl(const char* name, axfs_region& region, FILE* file, uint64_t 
 
 #define loadRegion(region, file, offset) loadRegionImpl(#region, region, file, offset)
 
+
+mtar_t make_tar(char* filename) {
+	int* error;
+	struct stat statbuffer;
+
+	//  overwrite it before to be safe
+	// stat(filename, &statbuffer);
+	// if (statbuffer.st_mtime == 0) {
+	FILE* f = fopen(filename, "w");
+	fclose(f);
+	// }
+	mtar_t tar_file;
+	int ret = mtar_open(&tar_file, filename, "w+");
+	if (ret != 0)
+		printf("tar error: %s", mtar_strerror(ret));
+	return tar_file;
+}
+
+
+int mtar_write_link_header(mtar_t* tar, const char* name, const char* linkname) {
+	mtar_header_t h;
+	/* Build header */
+	memset(&h, 0, sizeof(h));
+	strcpy(h.name, name);
+	strcpy(h.linkname, linkname);
+	h.type = MTAR_TSYM;
+	h.mode = 0664;
+	/* Write header */
+	return mtar_write_header(tar, &h);
+}
+
+
+char* folder_filename(char* folder, const char* filename) {
+	char dirpath[512];
+	strcpy(dirpath, folder);
+	char str[512];
+	if (strlen(folder) == 0)
+		sprintf_s(str, sizeof(str), "%s", filename);
+	else
+		sprintf_s(str, sizeof(str), "%s/%s", dirpath, filename);
+	return str;
+}
+
+
+char* tar_name(char* in) {
+	char tarname[512];
+	snprintf(tarname, 512, "%s.tar", in);
+	return tarname;
+}
+
+
 struct axfs
 {
 	axfs_super_onmedia superblock;
@@ -173,7 +226,7 @@ struct axfs
 	axfs_region modes;
 	axfs_region uids;
 	axfs_region gids;
-
+	const char* source_filename;
 	void* cblock_buffer = nullptr;
 	mutable uint64_t cachedBlock = (uint64_t)-1;
 
@@ -187,6 +240,7 @@ struct axfs
 		FILE* file = nullptr;
 		auto result = fopen_s(&file, filename, "rb");
 		assert(file);
+		source_filename = filename;
 		fread(&superblock, sizeof(superblock), 1, file);
 		assert(superblock.magic == 0x48A0E4CD);
 		assert(superblock.compression_type == 0); // ZLIB
@@ -387,6 +441,63 @@ struct axfs
 		}
 	};
 
+	void dump_tar(mtar_t tar_file, uint64_t id = 0, char* path = "") {
+		uint64_t numFiles = getNumEntries(id);
+		uint64_t first = getArrayIndex(id);
+
+		for (uint64_t i = 0; i < numFiles; ++i)
+		{
+			printf("%3lld:", first + i);
+			//for (int j = 0; j < level; ++j)
+			//	printf("\t");
+			const char* name = getName(first + i);
+			auto mode = getMode(first + i);
+			if (S_ISDIR(mode))
+			{
+
+				char* str = folder_filename(path, name);
+				// add folder to tar and recurse into it
+				printf("%s/\n", name);
+				mtar_write_dir_header(&tar_file, str);
+				dump_tar(tar_file, first + i, str);
+			}
+			else if (S_ISLNK(mode))
+			{
+				uint64_t size = getFileSize(first + i);
+
+				// get path of link and add link to tar
+				char linkName[1024];
+				readFile(first + i, linkName, 0, sizeof(linkName));
+				linkName[size] = 0;
+
+				char* str = folder_filename(path, name);
+
+				mtar_write_link_header(&tar_file, str, linkName);
+				printf("%s -> %s\n", str, linkName);
+			}
+			else if (S_ISREG(mode))
+			{
+				uint64_t size = getFileSize(first + i);
+				printf("%s\t%lld ", name, size);
+
+				char* str = folder_filename(path, name);
+
+				// read file data and put it in the tar
+				void* data = malloc(size);
+				readFile(first + i, data, 0, size);
+
+				mtar_write_file_header(&tar_file, str, size);
+				mtar_write_data(&tar_file, data, size);
+
+				printInfo(first + i);
+			}
+			else
+			{
+				printf("%s?\n", name);
+			}
+		}
+	}
+
 	uint64_t getNodeIndex(uint64_t id) const
 	{
 		return node_index.axfs_bytetable_stitch(id);
@@ -394,17 +505,35 @@ struct axfs
 
 };
 
-int main()
-{
-	axfs fs;
-	fs.load("initrd.img");
 
+int main(int argc, char* argv[])
+{
+	char* filename;
+	char* tar_filename;
+	axfs fs;
+	if (argc != 2 && argc != 3) {
+		printf("usage: axfs.exe input.img [output_tar_name]\n");
+		exit(1);
+	}
+	printf("%d", argc);
+
+	filename = /*"fsimage1.dec"*/ argv[1];
+	if (argc == 2) {
+		tar_filename = tar_name(filename);
+		printf("tar: %s", tar_filename);
+	} else {
+		tar_filename = argv[2];
+	}
+
+	fs.load(filename);
 	fs.ls(0);
 
-	uint64_t size = fs.getFileSize(19);
-	void * data = malloc((size_t) size);
-	fs.readFile(19, data, 0, size);
-	free(data);
+	// write fs dump to tar file
+	//TODO maybe?: add .tar.gz if user is to lazy to just gzip themselfs
+	mtar_t tar_file = make_tar(tar_filename);
+	fs.dump_tar(tar_file);
+	mtar_finalize(&tar_file);
+	mtar_close(&tar_file);
 	
     return 0;
 }

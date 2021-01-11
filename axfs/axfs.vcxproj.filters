@@ -74,5 +74,11 @@
     <ClCompile Include="..\kernel\axfs\axfs_uncompress.c">
       <Filter>kernel</Filter>
     </ClCompile>
+    <ClCompile Include="microtar.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="microtar.h">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
