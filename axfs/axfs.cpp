@@ -458,40 +458,42 @@ struct axfs
 		}
 	};
 
-	void dump_tar(mtar_t tar_file, uint64_t id = 0, char* path = "") {
+	void dump_tar(mtar_t tar_file, uint64_t id = 0, char* path = "", int depth = 0) {
 		uint64_t numFiles = getNumEntries(id);
 		uint64_t first = getArrayIndex(id);
 
 		for (uint64_t i = 0; i < numFiles; ++i)
 		{
 			printf("%3lld:", first + i);
+			printf("\t%.*s", depth, "\t\t\t\t\t\t\t\t\t");
+
 			const char* name = getName(first + i);
 			char* full_path = folder_filename(path, name);
 			auto mode = getMode(first + i);
 
 			if (S_ISDIR(mode))
 			{
-				// add folder to tar and recurse into it
-				printf("%s/\n", name);
+				printf("%s/\t%s\n", name, "DIR");
 				mtar_write_dir_header(&tar_file, full_path);
-				dump_tar(tar_file, first + i, full_path);
+				dump_tar(tar_file, first + i, full_path, depth + 1);
 			}
 			else if (S_ISLNK(mode))
 			{
 				uint64_t size = getFileSize(first + i);
 
 				// get path of link and add link to tar
-				char linkName[1024];
-				readFile(first + i, linkName, 0, sizeof(linkName));
+				char* linkName = (char*)malloc(size+1);
+				readFile(first + i, linkName, 0, size);
 				linkName[size] = 0;
 
 				mtar_write_link_header(&tar_file, full_path, linkName);
-				printf("%s -> %s\n", full_path, linkName);
+				printf("%s -> %s\tLINK\n", name, linkName);
+				free(linkName);
 			}
 			else if (S_ISREG(mode))
 			{
 				uint64_t size = getFileSize(first + i);
-				printf("%s\t%lld ", name, size);
+				printf("%s\t%lld\tFILE\n", name, size);
 
 				// read file data and put it in the tar
 				void* data = malloc(size);
@@ -501,22 +503,24 @@ struct axfs
 				mtar_write_file_header(&tar_file, full_path, size);
 				mtar_write_data(&tar_file, data, size);
 
-				printInfo(first + i);
 				free(data);
 			}
 			// afaik these dont have data.
 			else if (S_ISCHR(mode)) {
+				printf("%s\t%s\n", name, "CHR");
 				mtar_write_generic_header(&tar_file, full_path, MTAR_TCHR);
 			}
 			else if (S_ISBLK(mode)) {
+				printf("%s\t%s\n", name, "BLK");
 				mtar_write_generic_header(&tar_file, full_path, MTAR_TCHR);
 			}
 			else if (S_ISFIFO(mode)) {
+				printf("%s\t%s\n", name, "FIFO");
 				mtar_write_generic_header(&tar_file, full_path, MTAR_TFIFO);
 			}
 			else
 			{
-				printf("%s?\n", name);
+				printf("%s\t%lld\n", full_path, mode);
 			}
 			free(full_path);
 		}
@@ -542,13 +546,11 @@ int main(int argc, char* argv[])
 	filename = argv[1];
 	if (argc <= 2) {
 		tar_filename = tar_name(filename);
-		printf("tar: %s\n", tar_filename);
 	} else {
 		tar_filename = argv[2];
 	}
 
 	fs.load(filename);
-	fs.ls(0);
 
 	// write fs dump to tar file
 	mtar_t tar_file = make_tar(tar_filename);
@@ -556,5 +558,6 @@ int main(int argc, char* argv[])
 	mtar_finalize(&tar_file);
 	mtar_close(&tar_file);
 
+	printf("written to: %s\n", tar_filename);
     return 0;
 }
