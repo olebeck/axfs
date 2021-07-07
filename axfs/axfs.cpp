@@ -158,13 +158,8 @@ void loadRegionImpl(const char* name, axfs_region& region, FILE* file, uint64_t 
 mtar_t make_tar(char* filename) {
 	int* error;
 	struct stat statbuffer;
-
-	//  overwrite it before to be safe
-	// stat(filename, &statbuffer);
-	// if (statbuffer.st_mtime == 0) {
 	FILE* f = fopen(filename, "w");
 	fclose(f);
-	// }
 	mtar_t tar_file;
 	int ret = mtar_open(&tar_file, filename, "w+");
 	if (ret != 0)
@@ -172,6 +167,17 @@ mtar_t make_tar(char* filename) {
 	return tar_file;
 }
 
+
+int mtar_write_generic_header(mtar_t* tar, const char* name, const int type) {
+	mtar_header_t h;
+	/* Build header */
+	memset(&h, 0, sizeof(h));
+	strcpy(h.name, name);
+	h.type = type;
+	h.mode = 0664;
+	/* Write header */
+	return mtar_write_header(tar, &h);
+}
 
 int mtar_write_link_header(mtar_t* tar, const char* name, const char* linkname) {
 	mtar_header_t h;
@@ -186,21 +192,32 @@ int mtar_write_link_header(mtar_t* tar, const char* name, const char* linkname) 
 }
 
 
-char* folder_filename(char* folder, const char* filename) {
-	char dirpath[512];
-	strcpy(dirpath, folder);
-	char str[512];
-	if (strlen(folder) == 0)
-		sprintf_s(str, sizeof(str), "%s", filename);
-	else
-		sprintf_s(str, sizeof(str), "%s/%s", dirpath, filename);
-	return str;
+char* folder_filename(char* root, const char* filename) {
+	char* output = (char*)malloc(257 * sizeof(char));
+	assert(output != 0);
+	memset(output, 0, 257);
+
+	if (strlen(root) == 0) {
+		strcpy(output, filename);
+	}
+	else {
+		char* dirpath = (char*) malloc(257*sizeof(char));
+		assert(dirpath != 0);
+		memset(dirpath, 0, 257);
+
+		strcpy(dirpath, root);
+		sprintf_s(output, 256, "%s/%s", dirpath, filename);
+		free(dirpath);
+	}
+	return output;
 }
 
 
 char* tar_name(char* in) {
-	char tarname[512];
-	snprintf(tarname, 512, "%s.tar", in);
+	char* tarname = (char*)malloc(257 * sizeof(char));
+	assert(tarname != 0);
+	memset(tarname, 0, 257);
+	snprintf(tarname, 256, "%s.tar", in);
 	return tarname;
 }
 
@@ -448,18 +465,16 @@ struct axfs
 		for (uint64_t i = 0; i < numFiles; ++i)
 		{
 			printf("%3lld:", first + i);
-			//for (int j = 0; j < level; ++j)
-			//	printf("\t");
 			const char* name = getName(first + i);
+			char* full_path = folder_filename(path, name);
 			auto mode = getMode(first + i);
+
 			if (S_ISDIR(mode))
 			{
-
-				char* str = folder_filename(path, name);
 				// add folder to tar and recurse into it
 				printf("%s/\n", name);
-				mtar_write_dir_header(&tar_file, str);
-				dump_tar(tar_file, first + i, str);
+				mtar_write_dir_header(&tar_file, full_path);
+				dump_tar(tar_file, first + i, full_path);
 			}
 			else if (S_ISLNK(mode))
 			{
@@ -470,31 +485,40 @@ struct axfs
 				readFile(first + i, linkName, 0, sizeof(linkName));
 				linkName[size] = 0;
 
-				char* str = folder_filename(path, name);
-
-				mtar_write_link_header(&tar_file, str, linkName);
-				printf("%s -> %s\n", str, linkName);
+				mtar_write_link_header(&tar_file, full_path, linkName);
+				printf("%s -> %s\n", full_path, linkName);
 			}
 			else if (S_ISREG(mode))
 			{
 				uint64_t size = getFileSize(first + i);
 				printf("%s\t%lld ", name, size);
 
-				char* str = folder_filename(path, name);
-
 				// read file data and put it in the tar
 				void* data = malloc(size);
+				assert(data != 0);
 				readFile(first + i, data, 0, size);
 
-				mtar_write_file_header(&tar_file, str, size);
+				mtar_write_file_header(&tar_file, full_path, size);
 				mtar_write_data(&tar_file, data, size);
 
 				printInfo(first + i);
+				free(data);
+			}
+			// afaik these dont have data.
+			else if (S_ISCHR(mode)) {
+				mtar_write_generic_header(&tar_file, full_path, MTAR_TCHR);
+			}
+			else if (S_ISBLK(mode)) {
+				mtar_write_generic_header(&tar_file, full_path, MTAR_TCHR);
+			}
+			else if (S_ISFIFO(mode)) {
+				mtar_write_generic_header(&tar_file, full_path, MTAR_TFIFO);
 			}
 			else
 			{
 				printf("%s?\n", name);
 			}
+			free(full_path);
 		}
 	}
 
@@ -511,16 +535,14 @@ int main(int argc, char* argv[])
 	char* filename;
 	char* tar_filename;
 	axfs fs;
-	if (argc != 2 && argc != 3) {
+	if (argc < 2 || argc > 3) {
 		printf("usage: axfs.exe input.img [output_tar_name]\n");
 		exit(1);
 	}
-	printf("%d", argc);
-
-	filename = /*"fsimage1.dec"*/ argv[1];
-	if (argc == 2) {
+	filename = argv[1];
+	if (argc <= 2) {
 		tar_filename = tar_name(filename);
-		printf("tar: %s", tar_filename);
+		printf("tar: %s\n", tar_filename);
 	} else {
 		tar_filename = argv[2];
 	}
@@ -529,11 +551,10 @@ int main(int argc, char* argv[])
 	fs.ls(0);
 
 	// write fs dump to tar file
-	//TODO maybe?: add .tar.gz if user is to lazy to just gzip themselfs
 	mtar_t tar_file = make_tar(tar_filename);
 	fs.dump_tar(tar_file);
 	mtar_finalize(&tar_file);
 	mtar_close(&tar_file);
-	
+
     return 0;
 }

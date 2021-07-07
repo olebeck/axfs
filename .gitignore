@@ -6,3 +6,4 @@ axfs/x64/*
 *.VC.opendb
 x64/*
 ipch/*
+fsimage*

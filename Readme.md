@@ -5,10 +5,15 @@ This project implements a simple tool for reading AXFS (Advanced XIP File System
 
 See: https://github.com/jaredeh/axfs
 
+Usage
+------
+
+axfs.exe filename.img \[output name\]
+
 Status
 ------
 
-This project is barely usable.  It will load "initrd.img" from the current directory, and list the contents.
+This project is barely usable.  loads image, lists files and writes tar
 
 Error handling is not implemented, it will crash on errors.
 
